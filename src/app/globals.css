@@ -1,0 +1,98 @@
+@import "tailwindcss";
+
+/*
+  PreSend design tokens — "ledger control room".
+  A fraud-ops console reads a screen like a trading desk: dense, dark,
+  numerically precise, with risk color doing real signalling work rather
+  than decoration. Data (amounts, IDs, timestamps, scores) is set in a
+  monospace face to read like ledger entries; everything else uses a
+  plain technical grotesk. System font stacks are used deliberately (no
+  webfont fetch) so the app never depends on external font hosts.
+*/
+
+:root {
+  --color-void: #0a0d12;
+  --color-panel: #12161d;
+  --color-panel-raised: #171c25;
+  --color-hairline: #232936;
+  --color-ink: #e8ebf2;
+  --color-ink-muted: #8b93a6;
+  --color-ink-faint: #565f72;
+  --color-accent: #6c8ef5;
+  --color-accent-dim: #6c8ef533;
+
+  --color-risk-green: #33c481;
+  --color-risk-green-dim: #33c48122;
+  --color-risk-amber: #e8a33d;
+  --color-risk-amber-dim: #e8a33d22;
+  --color-risk-red: #e14f5a;
+  --color-risk-red-dim: #e14f5a22;
+
+  --font-ui:
+    "IBM Plex Sans", "Segoe UI", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-data:
+    "IBM Plex Mono", ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas,
+    monospace;
+}
+
+@theme inline {
+  --color-void: var(--color-void);
+  --color-panel: var(--color-panel);
+  --color-panel-raised: var(--color-panel-raised);
+  --color-hairline: var(--color-hairline);
+  --color-ink: var(--color-ink);
+  --color-ink-muted: var(--color-ink-muted);
+  --color-ink-faint: var(--color-ink-faint);
+  --color-accent: var(--color-accent);
+  --color-accent-dim: var(--color-accent-dim);
+  --color-risk-green: var(--color-risk-green);
+  --color-risk-green-dim: var(--color-risk-green-dim);
+  --color-risk-amber: var(--color-risk-amber);
+  --color-risk-amber-dim: var(--color-risk-amber-dim);
+  --color-risk-red: var(--color-risk-red);
+  --color-risk-red-dim: var(--color-risk-red-dim);
+  --font-ui: var(--font-ui);
+  --font-data: var(--font-data);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--color-void);
+  color: var(--color-ink);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Thin, low-contrast scrollbars that fit a dark console UI. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-hairline) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-hairline);
+  border-radius: 4px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
