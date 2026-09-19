@@ -55,6 +55,11 @@ export function AuditLog({ entries }: AuditLogProps) {
                     <span className="text-ink-faint">{entry.source}</span>
                   </div>
                 </div>
+                {entry.reason && (
+                  <p className="text-[11px] text-ink-muted italic mt-1.5 pt-1.5 border-t border-hairline/60 break-words">
+                    &ldquo;{entry.reason}&rdquo;
+                  </p>
+                )}
               </div>
             );
           })

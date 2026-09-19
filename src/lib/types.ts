@@ -69,6 +69,43 @@ export interface TriageResult {
   source: TriageSource;
 }
 
+/** The server response from /api/triage combining the server-authoritative score and the explanation. */
+export interface TriageResponse extends TriageResult {
+  score: ScoreResult;
+}
+
+export interface TriageRequestBody {
+  payment: Payment;
+  /**
+   * Client-provided score is explicitly ignored and discarded on the server.
+   * Defined here only to accurately type adversarial or legacy requests.
+   */
+  score?: unknown;
+}
+
+/** Input payload when submitting a new transaction from the UI or API. */
+export type CreateTransactionInput = Omit<Payment, "id"> & {
+  id?: string;
+};
+
+export interface CreateTransactionRequestBody {
+  transaction?: CreateTransactionInput;
+  payment?: CreateTransactionInput;
+  /**
+   * Client-provided score is strictly ignored and discarded on the server.
+   * Defined here only to type adversarial or tampered requests.
+   */
+  score?: unknown;
+}
+
+export interface CreateTransactionResponse {
+  transaction: Payment;
+  score: ScoreResult;
+  triage: TriageResult;
+  dbTransactionId?: string;
+  assessmentId?: string;
+}
+
 export interface AuditEntry {
   id: string;
   timestamp: string; // ISO string
@@ -79,4 +116,61 @@ export interface AuditEntry {
   band: RiskBand;
   source: TriageSource;
   amount: number;
+  reason?: string;
+}
+
+export interface DecisionRequestBody {
+  transactionId: string;
+  decision: Decision;
+  reason: string;
+  analystId?: string;
+  /**
+   * Client-provided scores/bands/typologies are strictly ignored and discarded on the server.
+   * Defined here to accurately type adversarial requests.
+   */
+  score?: unknown;
+  band?: unknown;
+  typology?: unknown;
+}
+
+export interface DecisionResponse {
+  success: boolean;
+  decision: Decision;
+  reason: string;
+  transactionId: string;
+  dbTransactionId?: string;
+  status: string;
+  auditLogId?: string;
+  score: number;
+  band: RiskBand;
+  typology: Typology;
+  timestamp: string;
+}
+
+export type TransactionStatus = "pending" | "held" | "escalated" | "released";
+
+export interface QueueItem {
+  payment: Payment;
+  score: ScoreResult;
+  decision: Decision | null;
+  status?: TransactionStatus;
+  decisionReason?: string | null;
+  dbId?: string;
+  createdAt?: string;
+}
+
+export type QueueFilter =
+  | "all"
+  | "pending"
+  | "released"
+  | "held"
+  | "escalated"
+  | "red"
+  | "amber"
+  | "green";
+
+export interface GetTransactionsResponse {
+  transactions: QueueItem[];
+  total: number;
+  source: "database" | "seed";
 }

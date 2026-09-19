@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import type { Decision, Payment, ScoreResult, TriageResult } from "@/lib/types";
 import { buildLeadLine, DECISION_META, formatClock, formatINR, RISK_BAND_META } from "@/lib/format";
 import { RiskGauge } from "./RiskGauge";
@@ -10,7 +11,7 @@ interface VerdictCardProps {
   triage: TriageResult | null;
   triageLoading: boolean;
   decision: Decision | null;
-  onDecision: (decision: Decision) => void;
+  onDecision: (decision: Decision, reason: string) => Promise<void> | void;
 }
 
 const TYPOLOGY_META: Record<string, string> = {
@@ -18,6 +19,24 @@ const TYPOLOGY_META: Record<string, string> = {
   "mule pattern": "Money moving fast through an unfamiliar payee or device.",
   benign: "No meaningful risk signal detected.",
   unclear: "Some signal present, but no single pattern dominates.",
+};
+
+const REASON_SUGGESTIONS: Record<Decision, string[]> = {
+  release: [
+    "Verified invoice details with merchant founder",
+    "Established recurring business payee",
+    "Customer confirmed transfer via verified phone",
+  ],
+  hold: [
+    "Urgent KYC keyword detected; customer callback required",
+    "Unrecognized device and off-hours timing anomaly",
+    "First-time transfer to new payee exceeding safe limit",
+  ],
+  escalate: [
+    "Confirmed mule network pattern matching known typology",
+    "Rapid velocity fan-out to unverified accounts",
+    "High-probability account takeover indicator",
+  ],
 };
 
 const LIFECYCLE_STAGES = ["Submitted", "Analyst gate", "Settled"] as const;
@@ -81,6 +100,18 @@ export function VerdictCard({
   const meta = RISK_BAND_META[score.band];
   const leadLine = buildLeadLine(score.recommendedDecision, payment.amount, payment.channel, score.typology);
   const currentStageIndex = decision ? 2 : 1;
+
+  const [pendingDecision, setPendingDecision] = useState<Decision | null>(null);
+  const [reason, setReason] = useState("");
+  const [reasonError, setReasonError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    setPendingDecision(null);
+    setReason("");
+    setReasonError(null);
+    setSubmitting(false);
+  }, [payment.id]);
 
   return (
     <div className="h-full overflow-y-auto p-6">
@@ -251,7 +282,7 @@ export function VerdictCard({
         </div>
 
         {/* Recommendation + actions */}
-        <div className="pb-2">
+        <div className="pb-4">
           <p className="text-xs text-ink-muted mb-2">
             Recommended: <span className="text-ink font-medium">{DECISION_META[score.recommendedDecision].buttonLabel}</span>. The analyst decides.
           </p>
@@ -259,22 +290,178 @@ export function VerdictCard({
             <DecisionButton
               decision="release"
               isRecommended={score.recommendedDecision === "release"}
-              disabled={!!decision}
-              onClick={() => onDecision("release")}
+              disabled={!!decision || submitting}
+              onClick={() => {
+                setPendingDecision("release");
+                setReason(REASON_SUGGESTIONS.release[0]);
+                setReasonError(null);
+              }}
             />
             <DecisionButton
               decision="hold"
               isRecommended={score.recommendedDecision === "hold"}
-              disabled={!!decision}
-              onClick={() => onDecision("hold")}
+              disabled={!!decision || submitting}
+              onClick={() => {
+                setPendingDecision("hold");
+                setReason(REASON_SUGGESTIONS.hold[0]);
+                setReasonError(null);
+              }}
             />
             <DecisionButton
               decision="escalate"
               isRecommended={score.recommendedDecision === "escalate"}
-              disabled={!!decision}
-              onClick={() => onDecision("escalate")}
+              disabled={!!decision || submitting}
+              onClick={() => {
+                setPendingDecision("escalate");
+                setReason(REASON_SUGGESTIONS.escalate[0]);
+                setReasonError(null);
+              }}
             />
           </div>
+
+          {/* Confirmation & Reason Interaction */}
+          {pendingDecision && !decision && (
+            <div className="mt-3 rounded-lg border border-hairline bg-panel-raised p-4 space-y-3 animate-in fade-in duration-150">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-ink">
+                    Confirm {DECISION_META[pendingDecision].buttonLabel}
+                  </span>
+                  <span
+                    className={`text-[10px] uppercase font-data px-1.5 py-0.5 rounded border ${
+                      pendingDecision === "release"
+                        ? "border-risk-green/40 text-risk-green bg-risk-green-dim"
+                        : pendingDecision === "hold"
+                        ? "border-risk-amber/40 text-risk-amber bg-risk-amber-dim"
+                        : "border-risk-red/40 text-risk-red bg-risk-red-dim"
+                    }`}
+                  >
+                    Required Audit Reason
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPendingDecision(null);
+                    setReason("");
+                    setReasonError(null);
+                  }}
+                  disabled={submitting}
+                  className="text-xs text-ink-muted hover:text-ink transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+
+              {/* Quick rationale presets */}
+              <div className="flex flex-wrap gap-1.5">
+                {REASON_SUGGESTIONS[pendingDecision].map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    disabled={submitting}
+                    onClick={() => {
+                      setReason(s);
+                      setReasonError(null);
+                    }}
+                    className="text-[11px] px-2 py-1 rounded border border-hairline bg-panel hover:bg-hairline/60 text-ink-muted hover:text-ink transition text-left cursor-pointer"
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+
+              <div>
+                <textarea
+                  rows={2}
+                  value={reason}
+                  onChange={(e) => {
+                    setReason(e.target.value);
+                    if (reasonError) setReasonError(null);
+                  }}
+                  disabled={submitting}
+                  placeholder="Why are you making this decision? (Required for immutable audit trail)"
+                  className="w-full rounded-md border border-hairline bg-panel p-2.5 text-xs text-ink focus:border-accent focus:outline-hidden placeholder:text-ink-faint"
+                />
+                {reasonError && (
+                  <p className="text-[11px] text-risk-red mt-1">{reasonError}</p>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  disabled={submitting}
+                  onClick={() => {
+                    setPendingDecision(null);
+                    setReason("");
+                    setReasonError(null);
+                  }}
+                  className="px-3 py-1.5 text-xs text-ink-muted hover:text-ink transition rounded cursor-pointer"
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  disabled={submitting}
+                  onClick={async () => {
+                    const trimmed = reason.trim();
+                    if (!trimmed) {
+                      setReasonError("A non-empty reason is required to record an analyst decision");
+                      return;
+                    }
+                    setSubmitting(true);
+                    try {
+                      await onDecision(pendingDecision, trimmed);
+                      setPendingDecision(null);
+                    } catch (err) {
+                      setReasonError(err instanceof Error ? err.message : "Failed to record decision");
+                    } finally {
+                      setSubmitting(false);
+                    }
+                  }}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded transition flex items-center gap-1.5 cursor-pointer ${
+                    pendingDecision === "release"
+                      ? "bg-risk-green text-void hover:brightness-110"
+                      : pendingDecision === "hold"
+                      ? "bg-risk-amber text-void hover:brightness-110"
+                      : "bg-risk-red text-void hover:brightness-110"
+                  } disabled:opacity-50`}
+                >
+                  {submitting ? (
+                    <>
+                      <span className="h-3 w-3 border-2 border-void border-t-transparent rounded-full animate-spin" />
+                      <span>Recording to Audit Log...</span>
+                    </>
+                  ) : (
+                    <span>Confirm &amp; Record Decision</span>
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {decision && (
+            <div className="mt-3 rounded-lg border border-hairline bg-panel-raised p-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-ink-muted">Action taken:</span>
+                <span
+                  className={`text-xs font-semibold uppercase ${
+                    decision === "release"
+                      ? "text-risk-green"
+                      : decision === "hold"
+                      ? "text-risk-amber"
+                      : "text-risk-red"
+                  }`}
+                >
+                  {DECISION_META[decision].label}
+                </span>
+              </div>
+              <span className="font-data text-[10px] text-ink-faint">
+                Logged to Supabase audit trail
+              </span>
+            </div>
+          )}
         </div>
       </div>
     </div>
