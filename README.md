@@ -1,22 +1,47 @@
 # PreSend
 
-**A pre-send fraud triage console for a payments platform.**
-
-Before an outbound payment (UPI or bank transfer) leaves the platform, PreSend evaluates it against a deterministic static checklist and account-level behavioral anomaly baselines, explains the verdict in plain English, and provides human fraud analysts with a one-click Hold / Release / Escalate decision workflow — with every action immutably logged.
-
-Designed for an Indian payments platform context (supporting UPI and Bank Transfer channels). Works in dual modes: with full **Supabase PostgreSQL** persistence, or in an offline **zero-setup synthetic demo mode**.
+**PreSend is a pre-send fraud triage console for outbound payment platforms (UPI and bank transfers).** Before a high-value or suspicious transaction leaves the platform, PreSend scores it using a deterministic static checklist and account-level behavioral anomaly baselines, generates an explainable plain-English brief, and equips fraud analysts with a one-click decision workflow with immutable audit logging. Built with Next.js 15, TypeScript, Tailwind CSS, and Supabase PostgreSQL.
 
 ---
 
-> [!NOTE]
-> ### Notice on Synthetic / Demo Data
-> - **Synthetic Accounts & Transactions**: All merchants, internal accounts, payees, transaction records, and historical baselines are synthetic demo data created for demonstration and testing.
-> - **Account Identity Scope**: `(merchant, initiatedBy)` (e.g. `Chai Point Retail` & `Store Ops Account`) represents a synthetic demo account identity. In a live production deployment, this maps to a KYC-verified merchant ID, virtual account number (VAN), or authenticated API key.
-> - **Contextual Velocity vs. Persisted Frequency**: The `transfersIn24h` field is a synthetic *contextual velocity* attribute supplied with the inbound transaction payload (simulating client-side telemetry or payment gateway metadata). It is compared against the demo account's historical average contextual velocity, clearly distinguished from true database-derived transaction frequency (which counts persisted transaction timestamps over a 24-hour window).
+## Key Features
+
+- **Dual-Layer Deterministic Scoring**: Combines a 6-rule static checklist with an account-level behavioral anomaly engine that measures deviations against historical baselines.
+- **Server-Authoritative Risk Calculation**: All risk scores (0–100), risk bands, and typologies are calculated strictly server-side, preventing client tampering or score spoofing.
+- **Behavioral Anomaly Baselines**: Automatically tracks account median amounts, contextual velocity, known payees, operating hours, and channel usage ($N \ge 3$) with strict self-exclusion.
+- **Human-in-the-Loop Triage Console**: Real-time pre-send queue sorted by risk score with instant multi-criteria filtering, full-text search, and funds-stopped metrics.
+- **Persistent Analyst Decision Workflow**: One-click Hold, Release, and Escalate actions with mandatory rationale capture and immutable audit logging in PostgreSQL.
+- **AI Explanation with Offline Resilience**: Generates plain-English analyst briefs and customer verification call scripts via Claude or Gemini, with an automatic deterministic template fallback.
+- **Zero-Setup Demo Mode**: Works immediately in-memory with synthetic demo seed data, or connects to Supabase PostgreSQL for enterprise persistence.
+- **Comprehensive Test Coverage**: Backed by **129 automated tests across 23 test suites**, strict TypeScript typing, and production Next.js 15 App Router architecture.
 
 ---
 
-## Architecture Overview
+## Application Preview
+
+> _Screenshots can be added by placing image files in the `docs/screenshots/` directory._
+
+| View | Description | Preview |
+|---|---|---|
+| **Analyst Dashboard** | Pre-send queue ranked by composite risk score, live search, status/band filters, and funds-protected tally. | ![Analyst Dashboard](docs/screenshots/analyst-dashboard.png)<br>*(Placeholder: `docs/screenshots/analyst-dashboard.png`)* |
+| **New Transaction** | Modal for initiating outbound transfers with instant schema validation and one-click fraud/benign test presets. | ![New Transaction](docs/screenshots/new-transaction.png)<br>*(Placeholder: `docs/screenshots/new-transaction.png`)* |
+| **Risk / Behavioral Analysis** | Risk gauge (0–100), account baseline comparison profile, fired rule breakdown, AI brief, and decision buttons. | ![Risk & Behavioral Analysis](docs/screenshots/risk-behavioral-analysis.png)<br>*(Placeholder: `docs/screenshots/risk-behavioral-analysis.png`)* |
+
+---
+
+## How It Works
+
+1. **Transaction Ingestion & Validation**: An outbound payment (UPI or Bank Transfer) is received via API or UI modal and validated against strict server-side runtime schemas.
+2. **Dual-Layer Risk Evaluation**:
+   - **Static Checklist**: Evaluates immediate heuristics (payee age, scam keywords, device history, amount, velocity, off-hours).
+   - **Behavioral Baseline**: Queries prior account history ($N \ge 3$, excluding the evaluated transaction) to measure deviations in transfer amount, contextual velocity, payee familiarity, timing, and channel.
+3. **Authoritative Composite Synthesis**: The server computes $\text{Composite Score} = \min(100, \text{Static} + \text{Behavioral})$, derives the authoritative risk band (Green / Amber / Red), and sets the default recommended action.
+4. **AI Narrative Generation**: The server passes the composite verdict and baseline profile to Claude, Gemini, or the deterministic template fallback to generate an analyst brief and customer call script.
+5. **Analyst Review & Audit Persistence**: The analyst reviews the flagged payment in the queue, executes a Hold / Release / Escalate action with a mandatory reason, and the decision is immutably logged to PostgreSQL.
+
+---
+
+## Architecture
 
 ```
 Inbound Payment (API / UI Modal)
@@ -62,11 +87,11 @@ Analyst Console (Next.js 15 App Router)
 
 ---
 
-## How the Scoring Engine Works
+## Risk Engine
 
-Every payment is scored independently and deterministically on the server across two layers: the **Static Rules Checklist** and the **Behavioral Anomaly Engine**.
+Every transaction is scored deterministically on the server across two distinct evaluation layers.
 
-### 1. Core Static Rules Checklist (`src/lib/rules.ts`)
+### 1. Static Rules Checklist (`src/lib/rules.ts`)
 
 | Warning Sign | Rule ID | Points | Trigger Condition |
 |---|---|:---:|---|
@@ -81,62 +106,66 @@ Every payment is scored independently and deterministically on the server across
 
 ### 2. Behavioral Anomaly Engine (`src/lib/behavioral/engine.ts`)
 
-When a synthetic demo account has at least 3 historical transactions (excluding the current payment under review), the behavioral engine extracts account baseline statistics (median transfer amount, contextual velocity average, known payee set, operating hour window, and channel history) and evaluates deviations:
+When a synthetic demo account has at least 3 historical transactions (excluding the current payment), the engine extracts baseline statistics (median amount, average contextual velocity, known payee list, active operating window, and channel usage) and flags significant deviations:
 
-| Anomaly Signal | Anomaly ID | Points | Trigger Condition & Threshold | Explainable Output Detail |
+| Anomaly Signal | Anomaly ID | Points | Trigger Condition & Threshold | Explainable Detail |
 |---|---|:---:|---|---|
 | **Behavioral amount spike** | `amount_spike` | **+12 to +20** | `amount >= 3.0 * median` AND `(amount - median) >= ₹15,000`. Multipliers $\ge 5.0\times$ yield **+20 pts**; multipliers $\ge 3.0\times$ yield **+12 pts**. | *"Amount ₹75,000 is 4.1x higher than demo account median (₹18,500 over 8 past transactions)."* |
 | **Elevated contextual velocity** | `velocity_spike` | **+12** | `transfersIn24h >= 3` AND `transfersIn24h >= 2.0 * baselineContextualAvg`. | *"Contextual velocity of 4 transfers in 24h is 2.0x higher than demo account baseline average (2.0 transfers)."* |
 | **Unseen payee for account** | `unseen_payee_for_account` | **+15** | Payee has never been paid before by this demo account AND `amount >= accountMedian`. | *"First-ever transfer to payee 'Suresh Nair' from this demo account (0 matches across 8 historical transactions)."* |
-| **Unusual off-hours timing** | `unusual_timing` | **+10** | Transaction initiated in off-hours (<07:00 or $\ge$23:00) deviating by $\ge 2$ hours from historical window, when 100% of historical transfers occurred during business hours. | *"Initiated at 01:00; demo account has exclusively transacted between 09:00 and 18:00 (6 past transactions)."* |
+| **Unusual off-hours timing** | `unusual_timing` | **+10** | Initiated in off-hours (<07:00 or $\ge$23:00) deviating by $\ge 2$ hours from historical window, when 100% of historical transfers occurred during business hours. | *"Initiated at 01:00; demo account has exclusively transacted between 09:00 and 18:00 (6 past transactions)."* |
 | **Unusual channel switch** | `unusual_channel` | **+8** | Account has 100% exclusive history on one channel ($\ge 3$ transfers, e.g. Bank Transfer) and switches to alternate channel (UPI) for an amount $\ge ₹20,000$. | *"Payment initiated via UPI, whereas 100% of past demo account transfers (5/5) used Bank Transfer."* |
 
 *Behavioral score is capped at 50 points.*
 
-#### Invariants & Safety Guarantees:
-- **Strict Self-Exclusion**: The transaction currently being evaluated is filtered out of history (`id !== payment.id` and `reference_id !== payment.id`).
-- **Cold-Start Safety**: If history contains fewer than 3 transactions, the behavioral score is strictly 0 with status `insufficient_data`, falling back 100% to core static rules without penalizing the customer.
-- **Hierarchical Fallback Scope**: Evaluates `(merchant, initiatedBy)` desk scope first; if fewer than 3 records exist, falls back to merchant-level baseline before falling back to cold start.
+#### Engine Invariants & Safety Guarantees:
+- **Strict Self-Exclusion**: The transaction currently being evaluated is excluded from historical baseline queries (`id !== payment.id` and `reference_id !== payment.id`).
+- **Cold-Start Safety**: If history contains fewer than 3 transactions, the behavioral score is strictly 0 with status `insufficient_data`, falling back cleanly to static rules without penalizing new accounts.
+- **Hierarchical Fallback Scope**: Evaluates `(merchant, initiatedBy)` desk scope first; if fewer than 3 records exist, falls back to merchant-level baseline before defaulting to cold start.
 
-### 3. Authoritative Composite Risk Calculation (`src/lib/behavioral/composite.ts`)
+### 3. Composite Risk Calculation (`src/lib/behavioral/composite.ts`)
 
-The final authoritative `ScoreResult` is strictly computed from:
+The final authoritative `ScoreResult` is calculated on the server:
 
 $$\text{Composite Score} = \min(100, \text{Static Score} + \text{Behavioral Score})$$
 
-Risk bands, recommendations, and typologies are mapped from the composite score:
+Risk bands, default recommendations, and typologies are mapped from the composite score:
 
 - 🟢 **Green (0–39): Low risk.** Routine payment. Default recommendation: **Release**.
 - 🟠 **Amber (40–69): Elevated.** Requires quick review. Default recommendation: **Hold and call**.
 - 🔴 **Red (70–100): High risk.** Critical warning signs. Default recommendation: **Hold and call** (analyst decides whether to escalate).
 
 **Typology Classification:**
-- **Impersonation scam** — urgent / verification scam language detected in the memo.
+- **Impersonation scam** — urgent / verification scam language detected in memo.
 - **Mule pattern** — elevated velocity (static `velocity` or `velocity_spike`) combined with an unfamiliar route (`new_payee`, `unseen_payee_for_account`, or `new_device`).
 - **Benign** — composite score < 40 with no suspicious pattern.
 - **Unclear** — elevated score without matching a single dominant typology.
 
 ---
 
-## Server Authority & Anti-Tampering
+## Human-in-the-Loop Decision Workflow
 
-PreSend implements strict zero-trust server authority:
-- **Client Score Stripping**: Any client-submitted `score`, `band`, `typology`, `behavioralScore`, or `assessment` object in `POST /api/transactions` or `POST /api/triage` is strictly ignored and discarded.
-- **Server-Only Verification**: All scores, bands, typologies, recommendations, and baseline metrics are computed exclusively on the server.
-- **Security Boundaries**: `SUPABASE_SERVICE_ROLE_KEY` is accessible only to server-side routes and repository methods; client-side execution is guarded and blocked (`getServiceSupabaseClient()` throws if simulated in a browser environment).
-- **Row-Level Security (RLS)**: Enabled across all four Supabase tables (`transactions`, `risk_assessments`, `analyst_decisions`, `audit_logs`).
+PreSend treats AI and automation as advisory: final disposition is placed in the hands of fraud analysts.
+
+- **Action Controls**: Analysts can **Release**, **Hold and call**, or **Escalate** any payment directly from the verdict view.
+- **Mandatory Decision Rationale**: Every decision requires a recorded reason, supported by one-click suggestions (e.g., *"Confirmed with customer via out-of-band call"*, *"Beneficiary verified against vendor master"*).
+- **Persistent State & Audit Log**:
+  - Updates `transactions.status` (`released`, `held`, `escalated`).
+  - Records the decision in `analyst_decisions` with timestamp and analyst identifier.
+  - Appends an immutable event to `audit_logs`.
+- **Live Metrics Strip**: Real-time counter tracks funds protected before settlement (INR sum of held + escalated transactions) alongside queue status tallies.
 
 ---
 
-## AI Explanation Pipeline (`src/lib/ai/triage.ts`)
+## AI Explanation Layer
 
-The AI layer never calculates or alters fraud scores, bands, or rules. It acts solely as an explainability and translation layer, receiving the server-computed composite verdict and account baseline profile.
+The AI layer serves strictly as an explainability and translation bridge. It receives the server-computed composite verdict and baseline profile, and **never computes or alters risk scores, bands, or rules**.
 
 ```
 Server Verdict & Account Baseline Profile
                    │
                    ▼
-       1. Anthropic (Claude Sonnet 4.5)
+       1. Anthropic (Claude 3.5 Sonnet)
                    │ (fallback on missing key or network error)
                    ▼
        2. Google Gemini (Gemini 2.0 Flash)
@@ -145,49 +174,29 @@ Server Verdict & Account Baseline Profile
        3. Deterministic Template Fallback (src/lib/template.ts)
 ```
 
-- **Output**:
-  1. **Analyst Brief**: 2–3 plain-English sentences explaining the verdict and highlighting baseline deviations.
-  2. **Call Script**: Numbered lines an analyst can read aloud to the customer on a verification call.
-- **Resilience**: The app is 100% functional with zero API keys configured, running reliably on the deterministic template generator.
-- **Audit Traceability**: Every brief is tagged with `source: "model"` or `source: "rules"`.
+- **Generated Artifacts**:
+  1. **Analyst Brief**: 2–3 plain-English sentences summarizing the risk verdict and baseline deviations.
+  2. **Customer Call Script**: Numbered verification questions tailored to the triggered signals for analyst use on out-of-band calls.
+- **Zero-Dependency Resilience**: The platform functions 100% reliably without external API keys, seamlessly using the deterministic template fallback.
+- **Audit Source Tagging**: Every narrative is labeled with its origin (`source: "model"` or `source: "rules"`).
 
 ---
 
-## Console Features & Analyst Workflow
+## Security & Server Authority
 
-1. **Pre-Send Queue (`PaymentQueue.tsx`)**:
-   - Ranked by risk score (descending).
-   - Real-time client-side search across Merchant, Payee, and Transaction ID.
-   - Status filters: `All`, `Pending`, `Released`, `Held`, `Escalated`.
-   - Risk-band filters: `Red`, `Amber`, `Green`.
-   - Visual badges: Merchant bank badges, channel, risk dots, and purple anomaly indicators (`+15 Anomaly`).
-2. **New Transaction Modal (`NewTransactionModal.tsx`)**:
-   - Interactive modal to submit new outbound transactions.
-   - Quick-fill presets: *Benign routine vendor*, *Urgent KYC impersonation*, *Fast mule fan-out*, *High-value supplier*.
-   - Strict runtime schema validation with user-friendly error banners.
-3. **Verdict & Anomaly Breakdown (`VerdictCard.tsx`)**:
-   - Visual Risk Gauge (0–100) and lifecycle stepper (Submitted $\to$ Analyst gate $\to$ Settled).
-   - Structured From / To / Channel / Device / Memo detail grid.
-   - **Account Behavioral Baseline Profile**: Shows historical sample size, median amount comparison, velocity baseline, payee history, operating window, and behavioral score contribution.
-   - **Fired Signals List**: Clearly differentiates `Core Rule` from `Behavioral Anomaly` badges.
-   - Human analyst action buttons (**Release**, **Hold and call**, **Escalate**) with suggested action pre-selected.
-4. **Analyst Decision Capture**:
-   - Modal prompt capturing mandatory decision reasons with one-click suggestions.
-   - Persists to `analyst_decisions`, updates `transactions.status`, and writes an immutable audit record.
-5. **Live Metrics Strip (`MetricsStrip.tsx`)**:
-   - Live tally of funds stopped before settlement (INR sum of held + escalated payments).
-   - Counters for pending review, held, escalated, and released payments.
-6. **Audit Trail (`AuditLog.tsx`)**:
-   - Chronological log of all analyst decisions and system events with timestamps, composite scores, bands, actors, and reasons.
+- **Zero-Trust Server Authority**: Inbound requests to `POST /api/transactions` and `POST /api/triage` strip any client-supplied `score`, `band`, `typology`, `behavioralScore`, or `assessment` fields. All risk calculations occur strictly on the server.
+- **Credential Isolation**: `SUPABASE_SERVICE_ROLE_KEY` is accessible exclusively to server-side routes and repository methods. Execution guards (`getServiceSupabaseClient()`) throw an immediate error if initialized in a browser context.
+- **Row-Level Security (RLS)**: Enabled across all Supabase PostgreSQL tables (`transactions`, `risk_assessments`, `analyst_decisions`, `audit_logs`).
+- **Runtime Input Validation**: All API inputs are sanitized and validated using strict boundary schemas (`validateCreateTransactionInput`, `validateDecisionInput`, `validateTriageInput`).
 
 ---
 
 ## Tech Stack
 
-- **Framework**: [Next.js 15](https://nextjs.org/) (App Router, React Server Components & API routes)
+- **Framework**: [Next.js 15](https://nextjs.org/) (App Router, React Server Components, Route Handlers)
 - **UI & Styling**: React 19 + [Tailwind CSS v4](https://tailwindcss.com/)
 - **Database & Persistence**: [Supabase](https://supabase.com/) (PostgreSQL 15) with connection pooling and RLS
-- **Language**: TypeScript (strict mode enabled, zero `any` leaks)
+- **Language**: TypeScript (strict mode, zero `any` leaks)
 - **AI SDKs**: `@anthropic-ai/sdk` (Claude) and `@google/generative-ai` (Gemini)
 - **Test Runner**: Node.js built-in test runner (`node --test`) via `tsx`
 
@@ -236,13 +245,13 @@ src/
         route.ts              # POST composite scoring & AI narrative endpoint
         route.test.ts         # integration tests for server authority & AI triage
   components/
-    PaymentQueue.tsx          # left column: pre-send queue with search & filters
-    VerdictCard.tsx           # center column: gauge, baseline profile, signals, actions
-    NewTransactionModal.tsx   # interactive modal for submitting new transactions
-    MetricsStrip.tsx          # top right: funds protected & status counts
-    AuditLog.tsx              # bottom right: immutable decision history
+    PaymentQueue.tsx          # pre-send queue with search & multi-criteria filters
+    VerdictCard.tsx           # risk gauge, baseline profile, signals, and analyst actions
+    NewTransactionModal.tsx   # modal for submitting new payments with presets
+    MetricsStrip.tsx          # live funds protected tally & status counters
+    AuditLog.tsx              # chronological immutable decision trail
     RiskGauge.tsx             # SVG gauge visualizing 0-100 risk score
-    TrustFooter.tsx           # footer: agentic principles & UPI regulatory context
+    TrustFooter.tsx           # agentic principles and Indian payments context
 supabase/
   migrations/
     20260919_initial_schema.sql       # core tables (transactions, assessments, decisions, audit)
@@ -251,7 +260,7 @@ supabase/
 
 ---
 
-## Local Setup & Development
+## Local Setup
 
 ### 1. Clone & Install Dependencies
 
@@ -263,23 +272,23 @@ npm install
 
 ### 2. Run in Demo Mode (Zero Setup)
 
-PreSend runs out-of-the-box with zero configuration:
+PreSend runs out-of-the-box with zero external dependencies:
 
 ```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser. All transactions, behavioral baselines, queue filtering, and template narratives function immediately in memory using synthetic demo seed data.
+Open [http://localhost:3000](http://localhost:3000) in your browser. All transactions, behavioral baselines, queue filtering, and template narratives function in memory using synthetic demo seed data.
 
 ### 3. Connect Supabase & AI Models (Optional)
 
-To enable persistent database storage and live AI model briefs, copy `.env.example` to `.env.local`:
+To enable persistent database storage and live model narratives, copy `.env.example` to `.env.local`:
 
 ```bash
 cp .env.example .env.local
 ```
 
-Configure your credentials in `.env.local`:
+Configure credentials in `.env.local`:
 
 ```bash
 # Supabase Configuration (Database Persistence)
@@ -291,13 +300,13 @@ ANTHROPIC_API_KEY=sk-ant-...
 GEMINI_API_KEY=AIzaSy...
 ```
 
-If using Supabase, apply the SQL migrations in order via the Supabase SQL Editor:
+If connecting Supabase, apply the SQL migrations in order via the Supabase SQL Editor:
 1. `supabase/migrations/20260919_initial_schema.sql`
 2. `supabase/migrations/20260919_behavioral_indexes.sql`
 
 ---
 
-## Running the Verification Suite
+## Testing & Verification
 
 Run the full automated test suite:
 
@@ -305,14 +314,14 @@ Run the full automated test suite:
 npm test
 ```
 
-**129 automated tests pass across 23 test suites**, verifying:
-- **Behavioral Anomaly Detection** (math helpers, cold-start safety, self-exclusion, all 5 anomaly signals, score capping, determinism)
-- **Composite Risk Calculation** (additive scoring, band thresholds, default recommendations, typology mapping, anti-tampering)
-- **Core Static Rules** (exact thresholds for amount, payee age, velocity, off-hours, scam keywords, point caps)
-- **Runtime Schema Validation** (type checks, positive amounts, valid hours, string trimming, boundary values)
-- **Queue Behavior** (risk sorting, case-insensitive search by merchant/payee/ID, status & band filters)
-- **Database Layer & Security** (domain mappers, credential isolation, server-only execution guards, service key protection)
-- **API Endpoints** (`POST /api/transactions`, `GET /api/transactions`, `POST /api/decisions`, `POST /api/triage`)
+**129 automated tests pass across 23 test suites**, covering:
+- **Behavioral Anomaly Detection**: Math helpers, cold-start safety, self-exclusion, all 5 anomaly signals, score capping, determinism.
+- **Composite Risk Calculation**: Additive scoring, band thresholds, default recommendations, typology mapping, anti-tampering.
+- **Core Static Rules**: Exact thresholds for amount, payee age, velocity, off-hours, scam keywords, point caps.
+- **Runtime Schema Validation**: Type checks, positive amounts, valid hours, string trimming, boundary values.
+- **Queue Behavior**: Risk sorting, case-insensitive search by merchant/payee/ID, status & band filters.
+- **Database Layer & Security**: Domain mappers, credential isolation, server-only execution guards, service key protection.
+- **API Endpoints**: `POST /api/transactions`, `GET /api/transactions`, `POST /api/decisions`, `POST /api/triage`.
 
 Verify strict TypeScript compilation:
 
@@ -325,6 +334,15 @@ Verify the production build:
 ```bash
 npm run build
 ```
+
+---
+
+## Demo Limitations / Synthetic Data Notice
+
+- **Synthetic Accounts & Transactions**: All merchants, internal accounts, payees, transaction records, and historical baselines are synthetic demo data created for demonstration and testing.
+- **Account Identity Scope**: `(merchant, initiatedBy)` (e.g., `Chai Point Retail` & `Store Ops Account`) represents a synthetic demo account identity. In a live production deployment, this maps to a KYC-verified merchant ID, virtual account number (VAN), or authenticated API key.
+- **Contextual Velocity vs. Persisted Frequency**: The `transfersIn24h` field is a synthetic *contextual velocity* attribute supplied with the inbound transaction payload (simulating client-side telemetry or payment gateway metadata). It is compared against the demo account's historical average contextual velocity, clearly distinguished from true database-derived transaction frequency (which counts persisted transaction timestamps over a 24-hour window).
+- **No Live Banking Integration**: This project is a demonstration triage console and does not connect to live banking networks or automated payment switches.
 
 ---
 
