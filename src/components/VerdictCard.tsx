@@ -177,6 +177,15 @@ export function VerdictCard({
           <p className="text-xs text-ink-muted mt-2 text-center max-w-sm">
             {TYPOLOGY_META[score.typology]}
           </p>
+          {score.behavioralScore !== undefined && score.behavioralScore > 0 && (
+            <div className="mt-3 flex items-center gap-1.5 text-[11px] font-data text-ink-muted bg-panel-raised border border-hairline px-2.5 py-1 rounded-full">
+              <span>Static: {score.staticScore ?? (score.score - score.behavioralScore)}</span>
+              <span>+</span>
+              <span className="text-purple-400 font-medium">Behavioral: +{score.behavioralScore}</span>
+              <span>=</span>
+              <span className="text-ink font-semibold">Composite: {score.score}</span>
+            </div>
+          )}
         </div>
 
         {/* Structured detail grid */}
@@ -214,6 +223,98 @@ export function VerdictCard({
           </div>
         </dl>
 
+        {/* Account Behavioral Baseline Profile */}
+        {score.behavioral && (
+          <div className="rounded-lg border border-hairline bg-panel-raised p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <p className="text-[11px] uppercase tracking-wide text-ink-faint">
+                  Account Behavioral Baseline
+                </p>
+                <span
+                  className="text-[9px] font-data px-1.5 py-0.2 rounded border border-ink-faint/30 text-ink-faint"
+                  title="Synthetic demo account identity (merchant, initiatedBy)"
+                >
+                  Demo Account
+                </span>
+              </div>
+              {score.behavioral.status === "insufficient_data" ? (
+                <span className="text-[10px] uppercase font-data px-2 py-0.5 rounded border border-hairline text-ink-faint">
+                  Cold Start ({score.behavioral.baseline.sampleSize}/3)
+                </span>
+              ) : (
+                <span className="text-[10px] font-data px-2 py-0.5 rounded border border-purple-500/30 text-purple-400 bg-purple-500/10">
+                  {score.behavioral.baseline.sampleSize} past transfers &middot;{" "}
+                  {score.behavioral.baseline.scope === "account" ? "Desk Baseline" : "Merchant Baseline"}
+                </span>
+              )}
+            </div>
+
+            {score.behavioral.status === "insufficient_data" ? (
+              <p className="text-xs text-ink-muted leading-relaxed">
+                Cold start baseline: Only {score.behavioral.baseline.sampleSize} of 3 historical transfers recorded for this demo account. Evaluated strictly on core checklist rules without anomaly penalty.
+              </p>
+            ) : (
+              <div className="space-y-2.5">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                  <div className="rounded border border-hairline/60 bg-panel px-2.5 py-2">
+                    <p className="text-[10px] uppercase text-ink-faint">Median Amount</p>
+                    <p className="font-data font-medium text-ink mt-0.5">
+                      {formatINR(score.behavioral.baseline.medianAmount)}
+                    </p>
+                    <p className="text-[10px] text-ink-faint mt-0.5">
+                      vs {formatINR(payment.amount)}
+                    </p>
+                  </div>
+                  <div className="rounded border border-hairline/60 bg-panel px-2.5 py-2">
+                    <p className="text-[10px] uppercase text-ink-faint">Contextual Velocity</p>
+                    <p className="font-data font-medium text-ink mt-0.5">
+                      {score.behavioral.baseline.avgContextualTransfersIn24h.toFixed(1)}/day
+                    </p>
+                    <p className="text-[10px] text-ink-faint mt-0.5">
+                      vs {payment.transfersIn24h} in 24h
+                    </p>
+                  </div>
+                  <div className="rounded border border-hairline/60 bg-panel px-2.5 py-2">
+                    <p className="text-[10px] uppercase text-ink-faint">Payee History</p>
+                    <p className="font-medium text-ink truncate mt-0.5">
+                      {score.behavioral.anomalies.some((a) => a.id === "unseen_payee_for_account")
+                        ? "New Payee"
+                        : "Known Payee"}
+                    </p>
+                    <p className="text-[10px] text-ink-faint mt-0.5 truncate">
+                      {score.behavioral.baseline.knownPayees.length} on file
+                    </p>
+                  </div>
+                  <div className="rounded border border-hairline/60 bg-panel px-2.5 py-2">
+                    <p className="text-[10px] uppercase text-ink-faint">Operating Window</p>
+                    <p className="font-data font-medium text-ink mt-0.5">
+                      {String(score.behavioral.baseline.typicalHourRange.min).padStart(2, "0")}:00&ndash;
+                      {String(score.behavioral.baseline.typicalHourRange.max).padStart(2, "0")}:00
+                    </p>
+                    <p className="text-[10px] text-ink-faint mt-0.5">
+                      sent {formatClock(payment.hourOfDay)}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between pt-0.5 text-xs">
+                  <span className="text-ink-muted">
+                    Behavioral contribution to composite score:
+                  </span>
+                  <span
+                    className={`font-data font-semibold ${
+                      score.behavioral.score > 0 ? "text-purple-400" : "text-ink-faint"
+                    }`}
+                  >
+                    +{score.behavioral.score} pts
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Fired rules - always-visible list, not hover-only */}
         <div>
           <p className="text-[11px] uppercase tracking-wide text-ink-faint mb-2">
@@ -223,18 +324,39 @@ export function VerdictCard({
             <p className="text-sm text-ink-muted">No rules fired on this payment.</p>
           ) : (
             <ul className="space-y-2">
-              {score.firedRules.map((rule) => (
-                <li
-                  key={rule.id}
-                  className="flex gap-3 rounded-lg border border-hairline bg-panel-raised px-3 py-2.5"
-                >
-                  <span className="font-data text-xs text-ink-faint shrink-0 pt-0.5">+{rule.points}</span>
-                  <div>
-                    <p className="text-sm text-ink font-medium">{rule.label}</p>
-                    <p className="text-xs text-ink-muted mt-0.5">{rule.detail}</p>
-                  </div>
-                </li>
-              ))}
+              {score.firedRules.map((rule) => {
+                const isBehavioral =
+                  rule.category === "behavioral" ||
+                  rule.id === "amount_spike" ||
+                  rule.id === "velocity_spike" ||
+                  rule.id === "unseen_payee_for_account" ||
+                  rule.id === "unusual_timing" ||
+                  rule.id === "unusual_channel";
+
+                return (
+                  <li
+                    key={rule.id}
+                    className="flex gap-3 rounded-lg border border-hairline bg-panel-raised px-3 py-2.5"
+                  >
+                    <span className="font-data text-xs text-ink-faint shrink-0 pt-0.5">+{rule.points}</span>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm text-ink font-medium">{rule.label}</p>
+                        {isBehavioral ? (
+                          <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.2 rounded border border-purple-500/30 text-purple-400 bg-purple-500/10">
+                            Behavioral Anomaly
+                          </span>
+                        ) : (
+                          <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.2 rounded border border-ink-faint/30 text-ink-faint bg-panel">
+                            Core Rule
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-ink-muted mt-0.5">{rule.detail}</p>
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>

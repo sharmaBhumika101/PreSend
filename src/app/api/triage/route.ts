@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { TriageContext, TriageResponse } from "@/lib/types";
 import { scorePayment } from "@/lib/rules";
+import { evaluateBehavioralAnomalies } from "@/lib/behavioral/engine";
+import { calculateCompositeRisk } from "@/lib/behavioral/composite";
+import { getCustomerTransactionHistory } from "@/lib/db/repository";
 import { validatePaymentInput } from "@/lib/validation";
 import { explainRiskAssessment } from "@/lib/ai/triage";
 
@@ -43,11 +46,19 @@ export async function POST(req: NextRequest) {
   const payment = validation.data;
 
   // -------------------------------------------------------------------------
-  // DETERMINISTIC SERVER-SIDE RISK SCORING
-  // Single source of truth: scorePayment(payment).
-  // Any client-provided score field in the request payload is ignored.
+  // DETERMINISTIC SERVER-SIDE RISK SCORING (AUTHORITATIVE COMPOSITE)
+  // Anti-tampering guarantee: Any client-provided score, band, or assessment
+  // is strictly ignored. The final ScoreResult is recomputed from:
+  // static deterministic score + behavioral anomaly score.
   // -------------------------------------------------------------------------
-  const serverScore = scorePayment(payment);
+  const staticScore = scorePayment(payment);
+  const history = await getCustomerTransactionHistory(
+    payment.merchant,
+    payment.initiatedBy,
+    payment.id
+  );
+  const behavioral = evaluateBehavioralAnomalies(payment, history);
+  const serverScore = calculateCompositeRisk(payment, staticScore, behavioral);
 
   const context: TriageContext = {
     payment: {

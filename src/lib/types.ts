@@ -26,7 +26,7 @@ export type Typology =
   | "benign"
   | "unclear";
 
-export type RuleId =
+export type StaticRuleId =
   | "new_payee"
   | "fraud_keyword"
   | "high_amount"
@@ -34,23 +34,82 @@ export type RuleId =
   | "velocity"
   | "off_hours";
 
+export type BehavioralRuleId =
+  | "amount_spike"
+  | "velocity_spike"
+  | "unseen_payee_for_account"
+  | "unusual_timing"
+  | "unusual_channel";
+
+export type RuleId = StaticRuleId | BehavioralRuleId;
+
 export interface FiredRule {
   id: RuleId;
   label: string;
   points: number;
   detail: string;
+  category?: "static" | "behavioral";
+}
+
+/**
+ * Baseline statistics for a synthetic/demo account identity (merchant, initiatedBy).
+ *
+ * NOTE on Account Identity & Contextual Velocity:
+ * 1. Treat (merchant, initiatedBy) explicitly as a synthetic/demo account identity,
+ *    not a real PII customer identity. In a production payments platform, this would
+ *    map to a verified merchant account ID, virtual account number (VAN), or client credential.
+ * 2. 'avgContextualTransfersIn24h' represents the baseline average of the contextual
+ *    'transfersIn24h' field reported on inbound payment payloads for this demo account.
+ *    It is distinct from a true database-derived transaction frequency (counting persisted
+ *    records within a 24h window).
+ */
+export interface CustomerBaseline {
+  merchant: string;
+  initiatedBy: string;
+  scope: "account" | "merchant";
+  sampleSize: number;
+  medianAmount: number;
+  meanAmount: number;
+  avgTransfersIn24h: number; // Alias for backward compatibility
+  avgContextualTransfersIn24h: number; // Explicit naming distinguishing contextual velocity
+  typicalHourRange: { min: number; max: number };
+  knownPayees: string[];
+  knownChannels: Channel[];
+  hasSufficientData: boolean;
+}
+
+export interface BehavioralAnomaly {
+  id: BehavioralRuleId;
+  label: string;
+  points: number;
+  detail: string;
+  baselineMetric: string;
+  observedValue: string;
+}
+
+export interface BehavioralAssessment {
+  score: number; // Sum of behavioral anomaly points, capped at 50
+  anomalies: BehavioralAnomaly[];
+  baseline: CustomerBaseline;
+  status: "evaluated" | "insufficient_data";
 }
 
 export type Decision = "hold" | "release" | "escalate";
 
 export interface ScoreResult {
-  score: number; // 0-100, capped
+  score: number; // 0-100, authoritative composite score
   band: RiskBand;
   typology: Typology;
   firedRules: FiredRule[];
   /** Deterministic default action for this band. The analyst can always
    * override it — this is a suggestion, never an automatic action. */
   recommendedDecision: Decision;
+  /** Static deterministic score from core checklist (scorePayment) */
+  staticScore?: number;
+  /** Behavioral anomaly score contribution (capped at 50) */
+  behavioralScore?: number;
+  /** Behavioral assessment details and account baseline metrics */
+  behavioral?: BehavioralAssessment;
 }
 
 /** What the UI/API sends to the LLM layer. The model never sees raw payment

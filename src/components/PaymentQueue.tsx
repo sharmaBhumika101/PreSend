@@ -327,6 +327,14 @@ export function PaymentQueue({
                       <span className="text-sm font-medium text-ink truncate flex-1">
                         {payment.payeeName}
                       </span>
+                      {score.behavioralScore !== undefined && score.behavioralScore > 0 && (
+                        <span
+                          className="text-[9px] font-data px-1.5 py-0.2 rounded border border-purple-500/30 text-purple-400 bg-purple-500/10 shrink-0"
+                          title={`+${score.behavioralScore} behavioral anomaly points against demo account baseline`}
+                        >
+                          +{score.behavioralScore} Anomaly
+                        </span>
+                      )}
                       <span
                         className={`font-data text-xs tabular-nums shrink-0 font-medium ${
                           score.band === "red"

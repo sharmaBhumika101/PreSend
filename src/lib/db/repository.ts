@@ -17,6 +17,7 @@ import {
 } from "./types";
 import type { Decision, Payment, QueueItem, ScoreResult } from "@/lib/types";
 import { scorePayment } from "@/lib/rules";
+import { SEED_PAYMENTS } from "@/lib/seed";
 
 // =============================================================================
 // TRANSACTIONS REPOSITORY
@@ -108,6 +109,97 @@ export async function updateTransactionStatus(
     throw new Error(`[PreSend DB] Failed to update transaction status: ${error.message}`);
   }
   return data;
+}
+
+/**
+ * Retrieves historical transactions for a synthetic demo account (merchant, initiatedBy).
+ *
+ * NOTE on Account Identity & Contextual Velocity:
+ * 1. Treat (merchant, initiatedBy) explicitly as a synthetic/demo account identity,
+ *    not a real PII customer identity. In a production payments platform, this would
+ *    map to a verified merchant account ID, virtual account number (VAN), or client credential.
+ * 2. Strict Self-Exclusion: excludeId / reference_id matching excludeId is filtered out so the
+ *    evaluated transaction is never included in its own baseline.
+ * 3. Contextual Velocity: 'transfersIn24h' is a synthetic contextual attribute reported with
+ *    the inbound payload, distinct from true database-derived transaction timestamp frequencies.
+ * 4. Graceful Fallback: If fewer than 3 records exist for the specific desk, falls back to
+ *    merchant-level history to check organization baseline. If database is not configured,
+ *    retrieves from SEED_PAYMENTS.
+ */
+export async function getCustomerTransactionHistory(
+  merchant: string,
+  initiatedBy: string,
+  excludeId?: string,
+  limit: number = 50
+): Promise<Payment[]> {
+  if (repositoryTestingOverrides.getCustomerTransactionHistory) {
+    return repositoryTestingOverrides.getCustomerTransactionHistory(
+      merchant,
+      initiatedBy,
+      excludeId,
+      limit
+    );
+  }
+
+  if (!isDatabaseConfigured()) {
+    const cleanSeed = SEED_PAYMENTS.filter((p) => p.id !== excludeId);
+    const accountSeed = cleanSeed.filter(
+      (p) => p.merchant === merchant && p.initiatedBy === initiatedBy
+    );
+    if (accountSeed.length >= 3) {
+      return accountSeed.slice(0, limit);
+    }
+    const merchantSeed = cleanSeed.filter((p) => p.merchant === merchant);
+    return (merchantSeed.length >= 3 ? merchantSeed : accountSeed).slice(0, limit);
+  }
+
+  try {
+    const supabase = getServiceSupabaseClient();
+    const { data, error } = await supabase
+      .from("transactions")
+      .select("*")
+      .eq("merchant", merchant)
+      .eq("initiated_by", initiatedBy)
+      .order("created_at", { ascending: false })
+      .limit(limit + 5);
+
+    if (error) {
+      console.warn(`[PreSend DB] getCustomerTransactionHistory error: ${error.message}`);
+      const cleanSeed = SEED_PAYMENTS.filter((p) => p.id !== excludeId);
+      return cleanSeed.filter((p) => p.merchant === merchant).slice(0, limit);
+    }
+
+    const cleanData = (data ?? []).filter(
+      (row) => row.id !== excludeId && row.reference_id !== excludeId
+    );
+    let payments = cleanData.map(dbTransactionToPayment);
+
+    // If desk-level history has fewer than 3 transactions, attempt merchant-level fallback
+    if (payments.length < 3) {
+      const { data: merchantData, error: mError } = await supabase
+        .from("transactions")
+        .select("*")
+        .eq("merchant", merchant)
+        .order("created_at", { ascending: false })
+        .limit(limit + 5);
+
+      if (!mError && merchantData) {
+        const cleanMerchantData = merchantData.filter(
+          (row) => row.id !== excludeId && row.reference_id !== excludeId
+        );
+        const merchantPayments = cleanMerchantData.map(dbTransactionToPayment);
+        if (merchantPayments.length >= 3) {
+          payments = merchantPayments;
+        }
+      }
+    }
+
+    return payments.slice(0, limit);
+  } catch (err) {
+    console.warn("[PreSend DB] Unexpected error in getCustomerTransactionHistory, falling back to seed:", err);
+    const cleanSeed = SEED_PAYMENTS.filter((p) => p.id !== excludeId);
+    return cleanSeed.filter((p) => p.merchant === merchant).slice(0, limit);
+  }
 }
 
 // =============================================================================
@@ -372,8 +464,15 @@ export const repositoryTestingOverrides: {
     limit?: number;
     offset?: number;
   }) => Promise<QueueItem[]>) | null;
+  getCustomerTransactionHistory: ((
+    merchant: string,
+    initiatedBy: string,
+    excludeId?: string,
+    limit?: number
+  ) => Promise<Payment[]>) | null;
 } = {
   listTransactionsWithDetails: null,
+  getCustomerTransactionHistory: null,
 };
 
 /**

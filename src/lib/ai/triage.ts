@@ -25,19 +25,37 @@ function buildPrompt(context: TriageContext): string {
   const { payment, score } = context;
   const rulesText =
     score.firedRules.length > 0
-      ? score.firedRules.map((r) => `- ${r.label} (+${r.points}): ${r.detail}`).join("\n")
+      ? score.firedRules
+          .map(
+            (r) =>
+              `- [${r.category === "behavioral" ? "BEHAVIORAL ANOMALY" : "RULE"}] ${r.label} (+${r.points}): ${r.detail}`
+          )
+          .join("\n")
       : "- none, no risk signals fired";
 
-  return `You are a fraud-operations assistant at an Indian payments platform. A deterministic rules engine has ALREADY scored a pending outbound payment and already decided the recommended action. Do not question, recompute, or contradict the score, band, typology, or recommended action - your only job is to explain the verdict clearly and produce a call script an analyst can read aloud.
+  let baselineContext = "";
+  if (score.behavioral && score.behavioral.status === "evaluated") {
+    const b = score.behavioral.baseline;
+    baselineContext = `
+ACCOUNT BEHAVIORAL BASELINE (${b.sampleSize} past transfers for demo account "${b.initiatedBy}"):
+- Historical median amount: \u20b9${Math.round(b.medianAmount).toLocaleString("en-IN")}
+- Typical contextual velocity: ${b.avgContextualTransfersIn24h.toFixed(1)} transfers/day
+- Known payees: ${b.knownPayees.slice(0, 5).join(", ")}
+- Known channels: ${b.knownChannels.join(", ")}
+- Behavioral anomaly contribution: +${score.behavioral.score} pts (Static: ${score.staticScore ?? 0} pts)
+`;
+  }
+
+  return `You are a fraud-operations assistant at an Indian payments platform. A deterministic rules and behavioral engine has ALREADY scored a pending outbound payment and already decided the recommended action. Do not question, recompute, or contradict the score, band, typology, or recommended action - your only job is to explain the verdict clearly and produce a call script an analyst can read aloud.
 
 VERDICT (already computed, treat as ground truth):
 - Risk score: ${score.score}/100
 - Risk band: ${score.band}
 - Typology: ${score.typology}
 - Recommended action: ${score.recommendedDecision}
-- Fired rules:
+- Fired rules and behavioral anomalies:
 ${rulesText}
-
+${baselineContext}
 PAYMENT CONTEXT (for wording only):
 - Amount: \u20b9${payment.amount.toLocaleString("en-IN")}
 - Payee name: ${payment.payeeName}
@@ -46,7 +64,7 @@ PAYMENT CONTEXT (for wording only):
 
 Respond with ONLY a JSON object (no markdown fences, no commentary) with exactly these fields:
 {
-  "brief": "2-3 sentence plain-English analyst brief explaining why this payment landed in this risk band, referencing the fired rules in plain language. Do not restate a hold/release/escalate instruction here - just explain the reasoning.",
+  "brief": "2-3 sentence plain-English analyst brief explaining why this payment landed in this risk band, referencing the fired rules and any baseline deviations in plain language. Do not restate a hold/release/escalate instruction here - just explain the reasoning.",
   "callScript": ["An array of 1-4 short strings, each one line an analyst could read aloud to the customer in order, matched in tone to the risk band (firm and cautious for red, light-touch for green)."]
 }`;
 }

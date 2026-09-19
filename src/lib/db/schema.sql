@@ -59,6 +59,7 @@ CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status);
 CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON transactions(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_transactions_payee_name ON transactions(payee_name);
 CREATE INDEX IF NOT EXISTS idx_transactions_reference_id ON transactions(reference_id) WHERE reference_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_transactions_customer_history ON transactions(merchant, initiated_by, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_risk_assessments_transaction_id ON risk_assessments(transaction_id);
 CREATE INDEX IF NOT EXISTS idx_risk_assessments_risk_band ON risk_assessments(risk_band);

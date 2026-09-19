@@ -164,4 +164,71 @@ describe("Server-Side Triage API Route - /api/triage", () => {
     const res = await POST(req);
     assert.equal(res.status, 400);
   });
+
+  it("evaluates behavioral anomalies from account history and recomputes composite score", async () => {
+    // Kirana Express has seed history with median amount around ~41k-55k, but Shop Owner Account typically pays Ramesh Grocers, Landlord, Rohit
+    // A payment with amount spike vs baseline or new recipient for Kirana Express
+    const payment = {
+      id: "PAY-TRIAGE-BEH-01",
+      merchant: "Kirana Express",
+      amount: 195000, // Amount spike: > 3x median
+      payeeName: "Unknown Foreign Exchanger", // Unseen payee
+      payeeAgeDays: 10, // Static rule new_payee (3 days) does not fire
+      memo: "Stock replenishment",
+      channel: "UPI",
+      deviceIsNew: false,
+      transfersIn24h: 1,
+      hourOfDay: 14,
+      initiatedBy: "Shop Owner Account",
+    };
+
+    const req = createPostRequest({ payment });
+    const res = await POST(req);
+
+    assert.equal(res.status, 200);
+    const data = await res.json();
+
+    assert.ok(data.score);
+    // Composite score must include static + behavioral score
+    assert.ok(data.score.behavioral);
+    assert.equal(data.score.behavioral.status, "evaluated");
+    assert.ok(data.score.behavioral.anomalies.length > 0);
+    assert.ok(data.score.behavioralScore > 0);
+    assert.equal(
+      data.score.score,
+      Math.min(100, (data.score.staticScore ?? 0) + data.score.behavioralScore)
+    );
+  });
+
+  it("SECURITY: forged client behavioral assessment or score is strictly discarded", async () => {
+    const payment = {
+      id: "PAY-TRIAGE-SECURITY-01",
+      merchant: "Chai Point Retail",
+      amount: 15000,
+      payeeName: "Deepa Traders",
+      payeeAgeDays: 500,
+      memo: "Supply order",
+      channel: "Bank Transfer",
+      deviceIsNew: false,
+      transfersIn24h: 1,
+      hourOfDay: 11,
+      initiatedBy: "Store Ops Account",
+    };
+
+    const forgedPayload = {
+      payment,
+      score: { score: 95, band: "red" },
+      behavioral: { score: 50, status: "evaluated" },
+    };
+
+    const req = createPostRequest(forgedPayload);
+    const res = await POST(req);
+
+    assert.equal(res.status, 200);
+    const data = await res.json();
+
+    // Client score of 95 must NOT override server calculation (routine benign payment)
+    assert.equal(data.score.band, "green");
+    assert.ok(data.score.score < 40);
+  });
 });

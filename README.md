@@ -12,11 +12,18 @@ can be reviewed in a browser with zero setup.
 
 ---
 
-## How the scoring works (read this in under a minute)
+## How the scoring works (Static Rules + Behavioral Anomaly Engine)
 
-Every pending payment starts at **0 points**. A short checklist of six
-warning signs adds points if they're true for that payment. Nothing here is
-guessed or written by AI — it's simple addition, the same every time.
+Every pending payment starts with a baseline evaluation from two pure, deterministic layers:
+
+1. **Static Rules Engine** (`src/lib/rules.ts`): Evaluates core payload signals against standard fraud checklists.
+2. **Behavioral Anomaly Engine** (`src/lib/behavioral/engine.ts`): Evaluates deviations against the demo account's historical baseline (median amounts, contextual velocity, payee novelty, operating hours, payment channels).
+
+> **Important Notes on Account Identity & Contextual Velocity:**
+> - **Synthetic / Demo Account Identity**: In this demo environment, `(merchant, initiatedBy)` explicitly represents a synthetic demo account identity (e.g. `Chai Point Retail - Store Ops Account`), not a real customer identity. In a production payments platform, this would map to a KYC-verified merchant ID, virtual account number (VAN), or authenticated API key.
+> - **Contextual Velocity vs. Database Frequency**: The `transfersIn24h` field is a synthetic *contextual velocity* attribute reported with the inbound payment payload (simulating real-time telemetry or client context). It is compared against the demo account's historical average contextual velocity. It is clearly distinguished from true database-derived transaction frequency (which counts persisted transaction timestamps within a 24-hour window).
+
+### Core Static Rules Checklist
 
 | Warning sign | Points | What it means |
 |---|---|---|
@@ -24,40 +31,42 @@ guessed or written by AI — it's simple addition, the same every time.
 | **Scam-style language in the note** | +30 | The payment note uses words scammers use to create panic — "urgent", "verify", "KYC", "refund", "OTP", "suspended", "act now", etc. |
 | **Large amount** | +15 | The payment is ₹50,000 or more. |
 | **New device** | +15 | Whoever sent this payment is using a device the account hasn't used before. |
-| **Sending money fast, repeatedly** | +10 | 3 or more payments have already gone out from this account in the last 24 hours. |
-| **Odd hour** | +5 | The payment was made before 7am or after 11pm. |
+| **High contextual velocity** | +10 | 3 or more payments reported in the last 24h context (`transfersIn24h >= 3`). |
+| **Odd hour** | +5 | The payment was made before 7am or after 11pm (outside 07:00–23:00). |
 
-The points add up (maximum 100) and land the payment in a **band**:
+### Deterministic Behavioral Anomaly Signals
 
-- 🟢 **Green (0–39): Low risk.** Nothing unusual — safe to send. Default suggestion: **Release**.
-- 🟠 **Amber (40–69): Elevated.** A quick check is worth doing before release. Default suggestion: **Hold and call**.
-- 🔴 **Red (70+): High risk.** Hold and verify with the customer before anything moves. Default suggestion: **Hold and call**.
+When an account has at least 3 historical transactions (excluding the payment under review), the behavioral engine evaluates:
 
-Note that red never auto-suggests "Escalate" — escalation is reserved for
-cases an analyst has actually confirmed as fraud, typically after reading
-the call script. The suggestion is shown as "Recommended: X. The analyst
-decides." and the analyst can always choose differently; whichever button
-they click is what's written to the audit log.
+| Anomaly Signal | Points | Condition |
+|---|---|---|
+| **Behavioral amount spike** | +12 to +20 | `amount >= 3.0 * median` and `(amount - median) >= ₹15,000` (+20 pts if `amount >= 5.0 * median`, +12 pts if `>= 3.0 * median`). |
+| **Elevated contextual velocity** | +12 | `transfersIn24h >= 3` and `transfersIn24h >= 2.0 * baselineContextualAvg`. |
+| **Unseen payee for account** | +15 | Payee has never been paid before by this demo account AND `amount >= accountMedian`. |
+| **Unusual off-hours timing** | +10 | Off-hours transaction (before 7am / after 11pm) that deviates by >= 2h from historical window, when account history is 100% daytime. |
+| **Unusual channel switch** | +8 | Switching from a 100% exclusive channel (e.g. Bank Transfer) to an alternate channel (UPI) for an amount >= ₹20,000. |
 
-PreSend also labels *what kind* of risk it looks like, using the same
-warning signs:
+*Behavioral score is capped at 50 points. For cold-start demo accounts (< 3 historical transactions), behavioral score is 0 with status `insufficient_data` without penalizing the customer.*
 
-- **Impersonation scam** — the note itself uses urgent/verify language. This
-  is the classic "your KYC will be blocked, verify now" scam script.
-- **Mule pattern** — money is moving fast, to someone unfamiliar, from an
-  unfamiliar device — but *without* scammy language. This looks like a
-  compromised account quietly funnelling money out.
-- **Benign** — nothing meaningful triggered.
-- **Unclear** — some points were added, but not enough of one pattern to
-  call it confidently.
+### Composite Score & Risk Bands
 
-**Nothing here is decided by AI.** The score, the band, and the label are
-all produced by one plain TypeScript function
-([`src/lib/rules.ts`](src/lib/rules.ts)) that a person can read top to
-bottom. The AI layer described below is only ever handed *the result* of
-this checklist — it explains the verdict, it never invents one. This is
-also why a benign payment can never be scored red: the rules are the only
-thing that can move the number, and they're all here in this one table.
+The final authoritative `ScoreResult` is strictly recomputed from:
+$$\text{Composite Score} = \min(100, \text{Static Score} + \text{Behavioral Score})$$
+
+The final score, risk band, recommendation, and displayed score all correspond to this composite server-calculated score:
+
+- 🟢 **Green (0–39): Low risk.** Safe to send. Default suggestion: **Release**.
+- 🟠 **Amber (40–69): Elevated.** Manual review recommended before release. Default suggestion: **Hold and call**.
+- 🔴 **Red (70–100): High risk.** Hold and verify with the customer. Default suggestion: **Hold and call**.
+
+PreSend also labels what kind of risk it looks like:
+- **Impersonation scam** — memo contains panic/urgency keywords.
+- **Mule pattern** — rapid velocity (static or behavioral spike) combined with unfamiliar routes (new payee, unseen payee, or new device).
+- **Benign** — composite score < 40 with no suspicious pattern.
+- **Unclear** — elevated score without matching a single dominant typology.
+
+**Server Authority & Anti-Tampering:**
+Nothing here is decided by AI or trusted from the client. The final score is computed authoritatively on the server. Client-provided scores, bands, or typologies are strictly ignored and discarded.
 
 ---
 
@@ -119,8 +128,9 @@ keys** — it just runs entirely on `source: "rules"` narratives.
 
 - **Next.js 15** (App Router) + **React 19** + **TypeScript** (strict mode)
 - **Tailwind CSS v4**
+- **Supabase (PostgreSQL)** — persistent transactions, risk assessments, analyst decisions, and audit trail with offline synthetic seed fallback
 - `@anthropic-ai/sdk` (primary LLM) + `@google/generative-ai` (fallback LLM)
-- No database — all state lives in React state, seeded on load
+- Pure deterministic behavioral anomaly engine + static rules checklist
 - Deploys to **Vercel** as-is
 
 ## Project structure
@@ -128,18 +138,35 @@ keys** — it just runs entirely on `source: "rules"` narratives.
 ```
 src/
   lib/
-    types.ts           # shared domain types
-    rules.ts            # the deterministic scoring engine (read this first)
-    rules.test.ts        # unit tests for the scoring engine
-    template.ts           # hardcoded fallback narrative generator
-    seed.ts                # 18 synthetic pending payments, 4 fake merchants
-    format.ts                # currency/time/risk-band display helpers
+    types.ts                # shared domain types & baseline interfaces
+    rules.ts                # static deterministic rulebook
+    behavioral/
+      engine.ts             # deterministic behavioral anomaly engine & baseline extraction
+      composite.ts          # authoritative composite score & band calculation
+    db/
+      client.ts             # server-only Supabase client with security guards
+      repository.ts         # persistent data access, history lookups & seed fallback
+      types.ts              # database models, schema types & domain mappers
+    ai/
+      triage.ts             # LLM explanation layer: Claude -> Gemini -> template
+    template.ts             # hardcoded fallback narrative generator
+    queue.ts                # queue sorting and multi-criteria filtering
+    validation.ts           # server-side runtime payload schema validators
+    seed.ts                 # 18 synthetic pending payments across demo merchants
+    format.ts               # currency/time/risk-band display helpers
   app/
-    page.tsx              # the console (client component, all state lives here)
-    api/triage/route.ts     # LLM layer: Claude -> Gemini -> template
+    page.tsx                # the console (queue, verdict, metrics, audit log, modal)
+    api/
+      transactions/route.ts # POST create transaction & GET queue list
+      decisions/route.ts    # POST human analyst decision workflow
+      triage/route.ts       # POST authoritative composite scoring & AI narrative
   components/
     PaymentQueue.tsx, VerdictCard.tsx, RiskGauge.tsx,
-    MetricsStrip.tsx, AuditLog.tsx, TrustFooter.tsx
+    NewTransactionModal.tsx, MetricsStrip.tsx, AuditLog.tsx, TrustFooter.tsx
+supabase/
+  migrations/
+    20260919_initial_schema.sql       # PostgreSQL DDL, constraints & RLS policies
+    20260919_behavioral_indexes.sql   # compound index for customer baseline lookups
 ```
 
 ## Running it locally
@@ -153,16 +180,22 @@ Open http://localhost:3000 — works immediately, no `.env` file required.
 
 To turn on real model-generated briefs, copy `.env.example` to `.env.local`
 and set `ANTHROPIC_API_KEY` (and optionally `GEMINI_API_KEY` as a fallback).
+To enable persistent Supabase storage, set `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`.
 
-## Running the rules engine tests
+## Running the test suite
 
 ```bash
 npm test
 ```
 
-26 tests using Node's built-in test runner, covering every rule's exact
-threshold, every typology path, the 100-point cap, and — most importantly —
-several benign scenarios asserting the score **never** reaches the red band.
+129 tests across 23 test suites using Node's built-in test runner, covering:
+- Behavioral anomaly detection (cold start, self-exclusion, all 5 signals, score capping)
+- Composite risk calculation and risk band recomputation
+- Static rules thresholds, typologies, and point caps
+- Server-side runtime validation schemas
+- Queue risk sorting, search, and multi-criteria filters
+- Server authority and anti-tampering guarantees (preventing client-spoofed scores or assessments)
+- Database mappers, client safety, and credential isolation
 
 ## Deploying
 

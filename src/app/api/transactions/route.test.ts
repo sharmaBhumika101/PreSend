@@ -204,6 +204,86 @@ describe("POST /api/transactions - New Transaction API", () => {
       if (prevGemini) process.env.GEMINI_API_KEY = prevGemini;
     }
   });
+
+  it("evaluates behavioral anomalies from account history and recomputes composite score", async () => {
+    // Payment for Kirana Express Shop Owner Account with amount spike
+    const payment = {
+      merchant: "Kirana Express",
+      amount: 180000,
+      payeeName: "Unseen Specialized Vendor",
+      payeeAgeDays: 30, // Core rule new_payee does not trigger
+      memo: "Inventory settlement",
+      channel: "UPI",
+      deviceIsNew: false,
+      transfersIn24h: 1,
+      hourOfDay: 14,
+      initiatedBy: "Shop Owner Account",
+    };
+
+    const req = createPostRequest(payment);
+    const res = await POST(req);
+
+    assert.equal(res.status, 201);
+    const data = await res.json();
+
+    assert.ok(data.score);
+    assert.ok(data.score.behavioral);
+    assert.equal(data.score.behavioral.status, "evaluated");
+    assert.ok(data.score.behavioral.anomalies.length > 0);
+    assert.ok(data.score.behavioralScore > 0);
+    assert.equal(
+      data.score.score,
+      Math.min(100, (data.score.staticScore ?? 0) + data.score.behavioralScore)
+    );
+  });
+
+  it("handles cold start demo accounts with insufficient history without false-positive penalties", async () => {
+    // Brand new merchant and desk with 0 history
+    const coldStartPayment = {
+      merchant: "Brand New Merchant Ltd",
+      amount: 12000,
+      payeeName: "New Supplier",
+      payeeAgeDays: 60,
+      memo: "First office supplies order",
+      channel: "Bank Transfer",
+      deviceIsNew: false,
+      transfersIn24h: 1,
+      hourOfDay: 11,
+      initiatedBy: "Brand New Desk",
+    };
+
+    const req = createPostRequest(coldStartPayment);
+    const res = await POST(req);
+
+    assert.equal(res.status, 201);
+    const data = await res.json();
+
+    assert.ok(data.score);
+    assert.ok(data.score.behavioral);
+    assert.equal(data.score.behavioral.status, "insufficient_data");
+    assert.equal(data.score.behavioralScore, 0);
+    assert.equal(data.score.score, 0);
+    assert.equal(data.score.band, "green");
+  });
+
+  it("SECURITY: forged client behavioral assessment or score is strictly discarded in POST", async () => {
+    const forgedPayload = {
+      ...VALID_TRANSACTION_PAYLOAD,
+      score: 88,
+      band: "red",
+      behavioral: { score: 50, status: "evaluated" },
+    };
+
+    const req = createPostRequest(forgedPayload);
+    const res = await POST(req);
+
+    assert.equal(res.status, 201);
+    const data = await res.json();
+
+    // Legitimate benign transaction remains green
+    assert.equal(data.score.band, "green");
+    assert.ok(data.score.score < 40);
+  });
 });
 
 function createGetRequest(searchParams?: Record<string, string>): NextRequest {

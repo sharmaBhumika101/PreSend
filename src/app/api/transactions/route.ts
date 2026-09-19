@@ -7,6 +7,8 @@ import type {
   TriageContext,
 } from "@/lib/types";
 import { scorePayment } from "@/lib/rules";
+import { evaluateBehavioralAnomalies } from "@/lib/behavioral/engine";
+import { calculateCompositeRisk } from "@/lib/behavioral/composite";
 import { SEED_PAYMENTS } from "@/lib/seed";
 import { sortQueueByRisk } from "@/lib/queue";
 import { validateCreateTransactionInput } from "@/lib/validation";
@@ -16,6 +18,7 @@ import {
   createAuditLog,
   createRiskAssessment,
   createTransaction,
+  getCustomerTransactionHistory,
   listTransactionsWithDetails,
 } from "@/lib/db/repository";
 import { paymentToDbInsert, scoreResultToDbInsert } from "@/lib/db/types";
@@ -71,10 +74,18 @@ export async function POST(req: NextRequest) {
   const payment = validation.data;
 
   // ---------------------------------------------------------------------------
-  // DETERMINISTIC SERVER-SIDE RISK SCORING (AUTHORITATIVE)
-  // Any client-provided score field in the request payload is strictly ignored.
+  // DETERMINISTIC SERVER-SIDE RISK SCORING (AUTHORITATIVE COMPOSITE)
+  // Anti-tampering guarantee: Any client-provided score, band, or assessment is strictly ignored.
+  // Final ScoreResult is recomputed from: static deterministic score + behavioral anomaly score.
   // ---------------------------------------------------------------------------
-  const serverScore = scorePayment(payment);
+  const staticScore = scorePayment(payment);
+  const history = await getCustomerTransactionHistory(
+    payment.merchant,
+    payment.initiatedBy,
+    payment.id
+  );
+  const behavioral = evaluateBehavioralAnomalies(payment, history);
+  const serverScore = calculateCompositeRisk(payment, staticScore, behavioral);
 
   // ---------------------------------------------------------------------------
   // DATABASE PERSISTENCE (SUPABASE)
@@ -165,12 +176,18 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   // Offline / Demo fallback when Supabase is not configured
   if (!isDatabaseConfigured()) {
-    const seedItems: QueueItem[] = SEED_PAYMENTS.map((payment) => ({
-      payment,
-      score: scorePayment(payment),
-      decision: null,
-      status: "pending" as TransactionStatus,
-    }));
+    const seedItems: QueueItem[] = SEED_PAYMENTS.map((payment) => {
+      const staticScore = scorePayment(payment);
+      const history = SEED_PAYMENTS.filter((p) => p.id !== payment.id);
+      const behavioral = evaluateBehavioralAnomalies(payment, history);
+      const composite = calculateCompositeRisk(payment, staticScore, behavioral);
+      return {
+        payment,
+        score: composite,
+        decision: null,
+        status: "pending" as TransactionStatus,
+      };
+    });
 
     const sortedSeedItems = sortQueueByRisk(seedItems);
 
